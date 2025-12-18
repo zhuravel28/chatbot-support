@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Чат підтримки</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 700px; margin: 20px auto; }
+    #chat { border: 1px solid #ccc; height: 320px; overflow-y: auto; padding: 10px; }
+    .msg { margin: 6px 0; }
+    .me { font-weight: bold; }
+    .bot { font-weight: bold; }
+    .row { display: flex; gap: 8px; margin-top: 10px; }
+    input { flex: 1; padding: 10px; }
+    button { padding: 10px 14px; cursor: pointer; }
+    .hint { color: #777; font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h2>Чат підтримки</h2>
+
+  <div id="chat"></div>
+
+  <div class="row">
+    <input id="msg" placeholder="Введіть повідомлення..." />
+    <button id="sendBtn">Надіслати</button>
+  </div>
+
+  <div class="hint">
+    Якщо треба змінити користувача — очисти токен:
+    <button id="logoutBtn">Вийти</button>
+  </div>
+
+  <p>
+    <a href="history.html">Перейти в особистий кабінет (історія)</a>
+  </p>
+  
+
+
+  <!-- saveToFirestore -->
+ <script type="module">
+  import { db } from "./firebase.js";
+  import {
+    collection,
+    addDoc,
+    serverTimestamp
+  } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+ window.saveToFirestore = async (userId, userText, botText) => {
+  try {
+    const ref = await addDoc(collection(db, "messages"), {
+      userId,
+      userText,
+      botText,
+      createdAt: serverTimestamp()
+    });
+
+    console.log("Saved pair:", ref.id);
+  } catch (e) {
+    console.error("Save pair error:", e);
+  }
+};
+
+  </script>
+
+  <!-- Основний чат -->
+  <script>
+    const API = "http://localhost:3000";
+    const chat = document.getElementById("chat");
+    const input = document.getElementById("msg");
+    const sendBtn = document.getElementById("sendBtn");
+    const logoutBtn = document.getElementById("logoutBtn");
+
+    function addLine(who, text) {
+      const p = document.createElement("div");
+      p.className = "msg";
+      p.innerHTML = `<span class="${who === 'Ви' ? 'me' : 'bot'}">${who}:</span> ${text}`;
+      chat.appendChild(p);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function getUserIdFromToken(token) {
+      try {
+        const payload = JSON.parse(atob(token.split(".")[1]));
+        return payload.id;
+      } catch {
+        return "unknown";
+      }
+    }
+
+    async function ensureLogin() {
+      let token = localStorage.getItem("token");
+      if (token) return token;
+
+      const username = prompt("Введіть логін (username):");
+      const password = prompt("Введіть пароль:");
+      if (!username || !password) throw new Error("No credentials");
+
+      // реєстрація (ігноруємо помилку якщо вже існує)
+      await fetch(API + "/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      }).catch(() => {});
+
+      // логін
+      const res = await fetch(API + "/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.token) throw new Error(data.error || "Login failed");
+      localStorage.setItem("token", data.token);
+      addLine("Бот", `✅ Ви увійшли як ${username}`);
+      return data.token;
+    }
+
+    async function send() {
+      const text = input.value.trim();
+      if (!text) return;
+
+      addLine("Ви", text);
+      input.value = "";
+      sendBtn.disabled = true;
+
+      try {
+        const token = await ensureLogin();
+        const payload = JSON.parse(atob(token.split(".")[1]));
+        const userId = payload.id;
+        const username = payload.username;
+
+
+        const res = await fetch(API + "/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token
+          },
+          body: JSON.stringify({ message: text })
+        });
+
+        if (res.status === 401) {
+          localStorage.removeItem("token");
+          addLine("Бот", "🔐 Сесія закінчилась. Натисни «Надіслати» ще раз.");
+          return;
+        }
+
+        const data = await res.json();
+        const reply = data?.reply;
+
+        if (!reply) {
+          addLine("Бот", "❌ Нема відповіді від сервера");
+          return;
+        }
+
+        addLine("Бот", reply);
+
+        // Firestore (пише по реальному userId)
+        if (window.saveToFirestore) {
+          try {
+            await window.saveToFirestore(userId, text, reply);
+
+          } catch (e) {
+            console.warn("Firestore save skipped:", e);
+          }
+        }
+
+      } catch (e) {
+        console.error("SEND ERROR:", e);
+        addLine("Бот", "❌ Помилка підключення/логіну");
+      } finally {
+        sendBtn.disabled = false;
+        input.focus();
+      }
+    }
+
+    logoutBtn.addEventListener("click", () => {
+      localStorage.removeItem("token");
+      addLine("Бот", "👋 Ви вийшли. Наступне повідомлення попросить логін.");
+    });
+
+    sendBtn.addEventListener("click", send);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") send();
+    });
+
+    addLine("Бот", "Привіт! Напиши питання 🙂");
+  </script>
+</body>
+</html>

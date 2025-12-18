@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <title>Особистий кабінет – історія</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 20px auto;
+    }
+    h2 {
+      margin-bottom: 5px;
+    }
+    #userInfo {
+      color: #555;
+      margin-bottom: 15px;
+    }
+    .msg {
+      margin: 3px 0;
+    }
+    .me {
+      font-weight: bold;
+    }
+    .bot {
+      font-weight: bold;
+    }
+    .time {
+      color: #888;
+      font-size: 12px;
+      margin-right: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h2>Історія повідомлень</h2>
+  <div id="userInfo"></div>
+  <div id="history"></div>
+
+  <p>
+    <a href="chat.html">⬅ Повернутися до чату</a>
+  </p>
+
+  <script type="module">
+    import { db } from "./firebase.js";
+    import {
+      collection,
+      getDocs,
+      query,
+      orderBy
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    const historyDiv = document.getElementById("history");
+    const userInfoDiv = document.getElementById("userInfo");
+
+    function getCurrentUserFromToken() {
+      const token = localStorage.getItem("token");
+      if (!token) return null;
+      try {
+        const payload = JSON.parse(atob(token.split(".")[1]));
+        // payload = { id, username, iat, exp, ... }
+        return payload;
+      } catch {
+        return null;
+      }
+    }
+
+    function addLine(who, text, date) {
+      const p = document.createElement("div");
+      p.className = "msg";
+
+      const timeSpan = document.createElement("span");
+      timeSpan.className = "time";
+      timeSpan.textContent = date ? `[${date}]` : "";
+
+      const whoSpan = document.createElement("span");
+      whoSpan.className = (who === "Ви" ? "me" : "bot");
+      whoSpan.textContent = who + ": ";
+
+      p.appendChild(timeSpan);
+      p.appendChild(whoSpan);
+      p.append(text);
+
+      historyDiv.appendChild(p);
+    }
+
+    async function loadHistory() {
+      const user = getCurrentUserFromToken();
+      if (!user) {
+        userInfoDiv.textContent =
+          "Немає активного користувача. Спочатку відкрийте чат, увійдіть, а потім знову зайдіть в історію.";
+        return;
+      }
+
+      const userId = user.id;
+      const username = user.username;
+      userInfoDiv.textContent = `Користувач: ${username} (ID: ${userId})`;
+
+      // Беремо всі повідомлення, відсортовані по часу
+      const q = query(
+        collection(db, "messages"),
+        orderBy("createdAt", "asc")
+      );
+
+      const snap = await getDocs(q);
+
+      if (snap.empty) {
+        historyDiv.textContent = "Історія порожня.";
+        return;
+      }
+
+      snap.forEach(docSnap => {
+        const data = docSnap.data();
+
+        // Фільтр по userId – показуємо тільки цього користувача
+        if (data.userId !== userId) return;
+
+        let timeStr = "";
+        try {
+          if (data.createdAt && data.createdAt.toDate) {
+            const d = data.createdAt.toDate();
+            timeStr = d.toLocaleString();
+          }
+        } catch (_) {}
+
+        // 🔹 Новий формат: одна пара в документі
+        if (data.userText !== undefined && data.botText !== undefined) {
+          addLine("Ви", data.userText, timeStr);
+          addLine("Бот", data.botText, ""); // другу строку без повторного часу
+          return;
+        }
+
+        // 🔹 Старий формат: role + text (на всяк випадок)
+        if (data.role && data.text) {
+          const who = data.role === "assistant" ? "Бот" : "Ви";
+          addLine(who, data.text, timeStr);
+          return;
+        }
+
+        // Інший формат – просто ігноруємо, щоб не було "undefined"
+      });
+    }
+
+    loadHistory().catch(err => {
+      console.error("History load error:", err);
+      historyDiv.textContent = "Помилка завантаження історії.";
+    });
+  </script>
+</body>
+</html>
